@@ -27,7 +27,7 @@ def generateDataFrame(nPoints: tuple, nodeIntervals: tuple, velocityModel: np.nd
 
     return df
 
-def generateMultipleData(nPoints: tuple, nodeIntervals: tuple, velocityModel: np.ndarray,sourceOriginInterval: np.array) -> pd.DataFrame:
+def generateMultipleData(nPoints: tuple, nodeDistances: tuple, velocityModel: np.ndarray,sourceOriginInterval: np.array) -> pd.DataFrame:
     """
     - sourceOriginInterval: np.array -> Must be the interval of the source in x and z axis, 
     e.g: [[0,0], [2,10]]
@@ -43,6 +43,6 @@ def generateMultipleData(nPoints: tuple, nodeIntervals: tuple, velocityModel: np
     
     for x in xInterval:
         for z in zInterval:
-            frames.append(generateDataFrame(nPoints, nodeIntervals, velocityModel, (x,z,0)))
+            frames.append(generateDataFrame(nPoints, nodeDistances, velocityModel, (x,z,0)))
     
     return pd.concat(frames)
