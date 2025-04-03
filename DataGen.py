@@ -19,7 +19,7 @@ def generateDataFrame(nPoints: tuple, nodeIntervals: tuple, velocityModel: np.nd
 
     travelTimes = np.squeeze(solver.traveltime.values) #Para remover a Terceira dimensão
 
-    dados = [{'x': x, 'z': z, 'travel_time': travelTimes[x][z],'x0': sourceOrigin[0],'z0': sourceOrigin[1]} 
+    dados = [{'x': x, 'z': z, 'travel_time': travelTimes[x][z],'source_x0': sourceOrigin[0],'source_z0': sourceOrigin[1]} 
          for x in range(travelTimes.shape[0]) 
          for z in range(travelTimes.shape[1])]
 
