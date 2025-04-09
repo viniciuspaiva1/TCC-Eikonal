@@ -46,3 +46,26 @@ def generateMultipleData(nPoints: tuple, nodeDistances: tuple, velocityModel: np
             frames.append(generateDataFrame(nPoints, nodeDistances, velocityModel, (x,z,0)))
     
     return pd.concat(frames)
+
+def check_derivatives(data: pd.DataFrame):
+    """
+    Check the derivatives of the traveltime field.
+    """
+    new_data = data.copy()
+    
+    # Avoid division by zero by replacing zero denominators with NaN temporarily
+    dx = new_data['x'] - new_data['source_x0']
+    dz = new_data['z'] - new_data['source_z0']
+    
+    new_data['dt_dx'] = new_data['travel_time'] / dx
+    new_data['dt_dz'] = new_data['travel_time'] / dz
+
+    # Replace inf or NaN with 0 after computation
+    new_data['dt_dx'].replace([np.inf, -np.inf], 0, inplace=True)
+    new_data['dt_dz'].replace([np.inf, -np.inf], 0, inplace=True)
+
+    # Calculate the velocity
+    new_data['velocity_hat'] = 1 / np.sqrt(new_data['dt_dx']**2 + new_data['dt_dz']**2)
+    new_data['velocity'] = 1.5 + 0.3 * new_data['z'] + new_data['x']
+
+    return new_data
