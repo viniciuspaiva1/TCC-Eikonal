@@ -79,6 +79,19 @@ def rmse(yhat: Tensor, y_true: Tensor, ):
 
 
 def score(yhat: Tensor, y_true: Tensor, labels: Optional[list] = None) -> pd.DataFrame:
+    """
+    Computes various regression metrics (R², MAPE, MAE, MSE, RMSE) between predicted and true values 
+    and returns them as a pandas DataFrame.
+
+    Args:
+        yhat (Tensor): Predicted values. If not a torch.Tensor, it will be converted to one.
+        y_true (Tensor): True values. If not a torch.Tensor, it will be converted to one.
+        labels (Optional[list]): List of labels for the index of the resulting DataFrame. 
+            Defaults to ["travel_time"] if not provided.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing the computed metrics as rows and their values as columns.
+    """
     # Ensure that inputs are tensors
     if not isinstance(yhat, torch.Tensor):
         yhat = torch.tensor(yhat)

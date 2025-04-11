@@ -133,8 +133,7 @@ class Architecture(object):
             # Step 5 - Sum all losses
             loss = data_loss + self.lamb * reg_loss
             if physics_loss is not None:
-                # loss += self.physics_loss_weight * physics_loss
-                loss += physics_loss
+                loss += self.physics_loss_weight * physics_loss
 
             # Step 6 - Computes gradients for all parameters
             loss.backward()
@@ -373,7 +372,7 @@ class Architecture(object):
 
             pbar.set_postfix(loss=loss.total_loss,
                              data_loss=loss.data_loss,
-                             physics_loss=loss.physics_loss,
+                             physics_loss=loss.physics_loss * self.physics_loss_weight,
                              val_loss=val_loss.total_loss)
 
     def save_checkpoint(self, filename, create_dirs=False):
