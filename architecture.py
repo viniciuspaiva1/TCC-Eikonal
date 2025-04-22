@@ -1,7 +1,8 @@
 import os
+from pathlib import Path
 import random
 import torch
-from typing import Optional
+from typing import Optional, Union, List
 from dataclasses import dataclass
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,6 +13,7 @@ import torch.optim as optim
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import matplotlib.image as img
 from matplotlib.figure import Figure
+from utils.preprocessing import DataTransformer
 
 
 @dataclass
@@ -29,18 +31,44 @@ class MappedLoss:
 
 
 class Architecture(object):
-    def __init__(self, model: KAN, loss_fn: callable, physics_fn: callable, optimizer, use_weighted_pi=False, lamb=1e-2, lamb_l1=1., lamb_entropy=0., lambda_physics=1., device=None):
+    def __init__(self, model: KAN,
+                 loss_fn: callable, 
+                 partial_optimizer: optim.Optimizer,
+                 physics_fn: Optional[callable] = None,
+                 partial_scheduler: Optional[optim.lr_scheduler.LRScheduler] = None,
+                 use_weighted_pi: bool = False,
+                 lamb: float = 1e-2,
+                 lamb_l1: float = 1.,
+                 lamb_entropy: float = 2.,
+                 lamb_coef: float = 0.,
+                 lamb_coefdiff: float = 0.,
+                 lambda_physics: float = 1.,
+                 singularity_avoiding: bool = False,
+                 data_pipeline: Optional[List[DataTransformer]] = None,
+                 device=None):
         super(Architecture, self).__init__()
+        
         self.physics_loss_weight = lambda_physics
         self.lamb = lamb
         self.lamb_l1 = lamb_l1
         self.lamb_entropy = lamb_entropy
+        self.lamb_coef = lamb_coef
+        self.lamb_coefdiff = lamb_coefdiff
+        
+        self.singularity_avoiding = singularity_avoiding
+        
         self.model = model
         self.device = device
         self.loss_fn = loss_fn
         self.physics_fn = physics_fn
-        self.optimizer = optimizer
         self.use_weighted_pi = use_weighted_pi
+        
+        self.partial_optimizer= partial_optimizer
+        self.partial_scheduler = partial_scheduler
+        self.scheduler = None
+        self.optimizer = None
+        self.init_optimizer_and_scheduler()
+        
         self.clipping = None
         if self.device is None:
             self.device = torch.device(
@@ -50,6 +78,11 @@ class Architecture(object):
 
         self.train_loader = None
         self.val_loader = None
+        
+        self.update_grid = None
+        self.n_grid_update = None
+        self.start_grid_update_step = None
+        self.stop_grid_update_step = None
 
         self.losses = []
         self.p_losses = []
@@ -57,9 +90,21 @@ class Architecture(object):
         self.reg_losses = []
         self.val_losses = []
         self.total_epochs = 0
+        
+        # Ensure all objects in data_pipeline are instances of DataTransformer
+        self.data_pipeline = data_pipeline if data_pipeline is not None else []
+        if self.data_pipeline:
+            assert all(isinstance(obj, DataTransformer) for obj in self.data_pipeline), \
+                "All objects in data_pipeline must be instances of DataTransformer"
 
         self.verbose = False
         self.warning_flag = False
+
+    def init_optimizer_and_scheduler(self):
+        self.optimizer = self.partial_optimizer(self.model.parameters())
+        if self.partial_scheduler is not None:
+            self.scheduler = self.partial_scheduler(self.optimizer)
+        return self.optimizer
 
     def to(self, device):
         # This method allows the user to specify a different device
@@ -103,28 +148,36 @@ class Architecture(object):
 
     @property
     def train_step_fn(self) -> callable:
-        def perform_train_step_fn(x, y) -> MappedLoss:
+        def perform_train_step_fn(x, y, step: Optional[int] = None) -> MappedLoss:
             # Sets model to TRAIN mode
             self.model.train()
+            
+            grid_update_freq = int(self.stop_grid_update_step / self.n_grid_update)
+            if (step % grid_update_freq == 0
+                and step < self.stop_grid_update_step
+                and step >= self.start_grid_update_step
+                and self.update_grid):
+                self.model.update_grid_from_samples(x)
 
             # Step 1 - Computes our model's predicted output - forward pass
-            input_features = self.model.layers[0].in_features
+            input_features = self.model.width_in[0]
             if (x.shape[1] != input_features) and (self.warning_flag is False):
                 self.warning_flag = True
                 print(
                     "[WARNING] Input features are different from the model's input features. "
                     f"Only the first {input_features} features will be used as model input.")
-            yhat = self.model(x[:, :input_features])
+            yhat = self.model(x[:, :input_features], singularity_avoiding=self.singularity_avoiding)
 
             # Step 2 - Computes the data loss
             data_loss = self.loss_fn(yhat, y)
 
             # Step 3 - Computes the physics loss using x
-            physics_loss = self.physics_fn(self.model, x)
+            physics_loss = None
+            if self.physics_fn is not None:
+                physics_loss = self.physics_fn(self.model, x)
 
             # Step 4 - Computes regularized loss
-            reg_loss = self.model.regularization_loss(self.lamb_l1,
-                                                      self.lamb_entropy)
+            reg_loss = self.model.get_reg('edge_forward_spline_n', self.lamb_l1, self.lamb_entropy, self.lamb_coef, self.lamb_coefdiff)
 
             # print(f"{reg_loss=}")
             # print(f"{physics_loss=}")
@@ -162,9 +215,9 @@ class Architecture(object):
         return perform_train_step_fn
 
     @property
-    def val_step_fn(self):
+    def val_step_fn(self) -> callable:
         # Builds function that performs a step in the validation loop
-        def perform_val_step_fn(x, y):
+        def perform_val_step_fn(x, y, step: Optional[int] = None):
             # Sets model to EVAL mode
             self.model.eval()
 
@@ -193,15 +246,16 @@ class Architecture(object):
             return None
 
         mini_batch_losses = []
-        for x_batch, y_batch in data_loader:
+        for step, (x_batch, y_batch) in enumerate(data_loader):
             x_batch = x_batch.to(self.device)
             y_batch = y_batch.to(self.device)
 
             # Compute the loss for the current batch
-            loss_tensor = step_fn(x_batch, y_batch)
+            loss_tensor = step_fn(x_batch, y_batch, step)
 
             # Append the loss tensor
             mini_batch_losses.append(loss_tensor)
+        
 
         # Stack all mini-batch losses into a 2D tensor
         # Shape: (num_batches, len(loss_tensor))
@@ -212,129 +266,17 @@ class Architecture(object):
         if mean_losses.dim() == 0:
             mean_losses = mean_losses.unsqueeze(0)
 
+        # Scheduler step (only for validation step)
+        if validation and self.scheduler is not None:
+            if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                # Step using validation metric (here, the main loss component)
+                self.scheduler.step(mean_losses[0].item())
+            else:
+                # Step based on epoch (not on validation loss)
+                self.scheduler.step()
+        
         return MappedLoss(*mean_losses)
 
-    def _plot_kan_network(self, gamma=1, resolution=2, figsize=None,
-                          folder="images") -> Figure:
-        if figsize is None:
-            figsize = (12, 24)
-        num_points = 10**resolution
-        num_layers = len(self.model.layers)
-        layer_sizes = [layer.in_features for layer in self.model.layers]
-        layer_sizes.append(self.model.layers[-1].out_features)
-
-        # Adjusted the figure size for vertical layout
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.axis('off')
-
-        # Calculate neuron positions for vertical layout, centralized by the largest layer
-        neuron_positions = {}
-        max_neurons = max(layer_sizes)  # Get the size of the largest layer
-
-        for layer_idx, layer_size in enumerate(layer_sizes):
-            # Centralize neurons based on the largest layer
-            x_positions = np.linspace(-max_neurons / 2,
-                                      max_neurons / 2, layer_size)
-            y = layer_idx  # Vertical position for each layer
-            for neuron_idx in range(layer_size):
-                if layer_sizes[layer_idx] == 1:
-                    x_positions[neuron_idx] = 0
-                neuron_positions[(layer_idx, neuron_idx)] = (
-                    x_positions[neuron_idx], y)  # Assign neuron positions
-                # Plot neurons as circles
-                ax.plot(x_positions[neuron_idx], y, 'o',
-                        color='black', markersize=8)
-
-        # Dynamically set the zoom factor based on the distance between the neurons
-
-        zoom_factor = figsize[0] / \
-            (max_neurons * max_neurons * len(layer_sizes))
-
-        # Plot connections and activation functions
-        for layer_idx, layer in enumerate(self.model.layers):
-            grid = layer.grid
-            spline_weight = layer.scaled_spline_weight
-            in_features = layer.in_features
-            out_features = layer.out_features
-            spline_order = layer.spline_order
-            grid_size = layer.grid_size
-            device = grid.device
-
-            for in_feat in range(in_features):
-                for out_feat in range(out_features):
-                    # Start and end positions for the connection
-                    start_pos = neuron_positions[(layer_idx, in_feat)]
-                    end_pos = neuron_positions[(layer_idx + 1, out_feat)]
-
-                    # Calculate the importance of the connection (e.g., norm of coefficients)
-                    coeffs = spline_weight[out_feat, in_feat, :]
-                    alpha = np.tanh(coeffs.abs().mean().item() * gamma)
-
-                    # Plot connection line
-                    ax.plot([start_pos[0], end_pos[0]], [start_pos[1], end_pos[1]],
-                            color='black', alpha=alpha, linewidth=2)
-
-                    # Positioning the image (spline) at the midpoint of the connection
-                    midpoint_x = (start_pos[0] + end_pos[0]) / 2
-                    midpoint_y = (start_pos[1] + end_pos[1]) / 2
-
-                    # Calculate the Euclidean distance between the two neurons
-                    distance = np.sqrt(
-                        (end_pos[0] - start_pos[0])**2 + (end_pos[1] - start_pos[1])**2)
-
-                    # Add the spline image at the midpoint with the dynamic zoom
-                    spline = img.imread(
-                        f"{folder}/{layer_idx}_{in_feat}_{out_feat}.png")
-                    # Set dynamic zoom factor
-                    imagebox = OffsetImage(spline, zoom=zoom_factor)
-                    ab = AnnotationBbox(
-                        imagebox, (midpoint_x, midpoint_y), frameon=False)
-                    ax.add_artist(ab)
-
-        return fig
-
-    def _save_kan_functions(self, folder="images", resolution=2):
-        num_points = 10**resolution
-        for i, layer in enumerate(self.model.layers):
-            grid = layer.grid
-            spline_weight = layer.scaled_spline_weight
-            in_features = layer.in_features
-            out_features = layer.out_features
-            spline_order = layer.spline_order
-            grid_size = layer.grid_size
-            device = grid.device
-
-            for in_feat in range(in_features):
-                for out_feat in range(out_features):
-                    coeffs = spline_weight[out_feat, in_feat, :]
-                    grid_points = grid[in_feat, spline_order: -spline_order]
-                    x_min = grid_points[0].item()
-                    x_max = grid_points[-1].item()
-                    x = torch.linspace(x_min, x_max, num_points, device=device)
-                    y = torch.zeros_like(x)
-                    x_input = x.unsqueeze(1).expand(-1, layer.in_features)
-                    bases = layer.b_splines(x_input)[:, in_feat, :]
-                    y = bases @ coeffs
-                    x_cpu = x.cpu().numpy()
-                    y_cpu = y.detach().cpu().numpy()
-
-                    # Criar figura
-                    plt.figure(figsize=(1, 1))
-                    # Remover ticks
-                    plt.xticks([])
-                    plt.yticks([])
-
-                    # Plotar o gráfico
-                    plt.plot(x_cpu, y_cpu, color='black', linewidth=5)
-                    plt.tight_layout()
-
-                    # Salvar com o nome no formato
-                    # "{id_camada}_{id_neuronio_entrada}_{id_neuronio_saida}.png"
-                    if not os.path.exists(folder):
-                        os.makedirs(folder)
-                    file_name = f"{folder}/{i}_{in_feat}_{out_feat}.png"
-                    plt.savefig(file_name)
-                    plt.close()
 
     def set_seed(self, seed=42):
         torch.backends.cudnn.deterministic = True
@@ -343,8 +285,21 @@ class Architecture(object):
         np.random.seed(seed)
         random.seed(seed)
 
-    def train(self, n_epochs, seed=42, verbose=False):
+
+    def train(self,
+              n_epochs,
+              update_grid=False,
+              n_grid_update=10,
+              start_grid_update_step=-1,
+              stop_grid_update_step=50,
+              seed=42,
+              verbose=False):
         self.verbose = verbose
+        
+        self.update_grid = update_grid
+        self.n_grid_update = n_grid_update
+        self.start_grid_update_step = start_grid_update_step
+        self.stop_grid_update_step = stop_grid_update_step
 
         # To ensure reproducibility of the training process
         self.set_seed(seed)
@@ -369,13 +324,17 @@ class Architecture(object):
             # Performs evaluation using mini-batches
             val_loss: MappedLoss = self._mini_batch(validation=True)
             self.val_losses.append(val_loss.total_loss)
-
+            
+            physics_loss = None
+            if loss.physics_loss is not None:
+                physics_loss = loss.physics_loss * self.physics_loss_weight
             pbar.set_postfix(loss=loss.total_loss,
                              data_loss=loss.data_loss,
-                             physics_loss=loss.physics_loss * self.physics_loss_weight,
+                             physics_loss=physics_loss,
                              val_loss=val_loss.total_loss)
 
-    def save_checkpoint(self, filename, create_dirs=False):
+
+    def save_checkpoint(self, filename: Path, create_dirs=False):
         """
         Save the checkpoint to a specified file.
 
@@ -392,7 +351,6 @@ class Architecture(object):
         # Builds dictionary with all elements for resuming training
         checkpoint = {
             'epoch': self.total_epochs,
-            'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'loss': self.losses,
             'd_loss': self.d_losses,
@@ -402,13 +360,17 @@ class Architecture(object):
 
         # Save the checkpoint
         torch.save(checkpoint, filename)
+        
+        self.model.saveckpt(path=os.path.dirname(filename) + "/")
 
-    def load_checkpoint(self, filename):
+
+    def load_checkpoint(self, filename, version: str = None):
         # Loads dictionary
         checkpoint = torch.load(filename, map_location=self.device)
 
         # Restore state for model and optimizer
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        version = "" if version is None else version
+        self.model.loadckpt(path=os.path.dirname(filename) + "/" + version)
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
         self.total_epochs = checkpoint['epoch']
@@ -418,6 +380,7 @@ class Architecture(object):
         self.val_losses = checkpoint['val_losses']
 
         self.model.train()  # always use TRAIN for resuming training
+
 
     def predict(self, x):
         # Set is to evaluation mode for predictions
@@ -430,6 +393,7 @@ class Architecture(object):
         self.model.train()
         # Detaches it, brings it to CPU and back to Numpy
         return y_hat_tensor.detach().cpu().numpy()
+
 
     def plot_losses(self):
         fig, axs = plt.subplots(3, 1, figsize=(10, 4))
@@ -454,23 +418,31 @@ class Architecture(object):
         plt.tight_layout()
         return fig
 
-    def plot_model(self, figsize=None, gamma=10, resolution=2, folder="images") -> Figure:
-        """Plot KAN Architecture
 
-        Args:
-            figsize (tuple[int, int]): Figure size.
-            gamma (int): Strength of line transparency. When too high, transparency
-        is 1.
-            resolution (int): Plot resolution.
-            folder (str): Folder to save the b-spline plot as images.
-
+    def refine(self, new_grid_size: int):
+        """Refine the grid of the model
+        
+        Parameters:
+            new_grid_size (int): New grid size to be used in the KAN.
+            
         Returns:
-            fig: Figure with the plot.
-
-        Nodes are represented as circles.
-        Line transparency is proportional to the importance of the connection.
+            None
         """
-        self._save_kan_functions(folder=folder, resolution=resolution)
-        fig = self._plot_kan_network(gamma=gamma, resolution=resolution,
-                                     figsize=figsize, folder=folder)
-        return fig
+        self.model = self.model.refine(new_grid_size)
+        self.model.to(self.device)
+        self.init_optimizer_and_scheduler()
+        
+    
+    def prune(self, node_threshold: float = 0.01, edge_threshold: float = 0.03):
+        """Prune the model by removing unused nodes and/or edges.
+        
+        Parameters:
+            node_threshold (float): Threshold for node pruning.
+            edge_threshold (float): Threshold for edge pruning.
+        
+        Returns:
+            None
+        """
+        self.model = self.model.prune(node_threshold, edge_threshold)
+        self.model.to(self.device)
+        self.init_optimizer_and_scheduler()
