@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
-from efficient_kan.kan import KAN
+from kan import KAN
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
