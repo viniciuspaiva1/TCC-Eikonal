@@ -29,7 +29,7 @@ class MappedLoss:
 
 
 class Architecture(object):
-    def __init__(self, model: KAN, loss_fn: callable, physics_fn: callable, optimizer, use_weighted_pi=False, lamb=1e-2, lamb_l1=1., lamb_entropy=0., lambda_physics=1., device=None):
+    def __init__(self, model: KAN, loss_fn: callable, physics_fn: callable, optimizer, scheduler=None, use_weighted_pi=False, lamb=1e-2, lamb_l1=1., lamb_entropy=0., lambda_physics=1., device=None):
         super(Architecture, self).__init__()
         self.physics_loss_weight = lambda_physics
         self.lamb = lamb
@@ -57,6 +57,8 @@ class Architecture(object):
         self.reg_losses = []
         self.val_losses = []
         self.total_epochs = 0
+
+        self.scheduler = scheduler
 
         self.verbose = False
         self.warning_flag = False
@@ -211,6 +213,12 @@ class Architecture(object):
         mean_losses = torch.mean(losses, dim=0)  # Shape: (4,)
         if mean_losses.dim() == 0:
             mean_losses = mean_losses.unsqueeze(0)
+
+        if validation and self.scheduler is not None:
+            if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                self.scheduler.step(mean_losses[0].item())  # total_loss
+            else:
+                self.scheduler.step()
 
         return MappedLoss(*mean_losses)
 
