@@ -117,6 +117,7 @@ class Architecture(object):
                     "[WARNING] Input features are different from the model's input features. "
                     f"Only the first {input_features} features will be used as model input.")
             yhat = self.model(x[:, :input_features])
+            yhat = torch.clamp(yhat, min=0)
 
             # Step 2 - Computes the data loss
             data_loss = self.loss_fn(yhat, y)
@@ -172,6 +173,7 @@ class Architecture(object):
 
             # Step 1 - Computes our model's predicted output - forward pass
             yhat = self.model(x)
+            yhat = torch.clamp(yhat, min=0)
 
             # Step 2 - Computes the data loss
             data_loss = self.loss_fn(yhat, y)
