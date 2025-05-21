@@ -24,7 +24,7 @@ def generateDataFrame(nPoints: tuple, nodeIntervals: tuple, velocityModel: np.nd
          for z in range(travelTimes.shape[1])]
 
     df = pd.DataFrame(dados)
-    df = df.loc[~((df['x'] == df['source_x0']) & (df['z'] == df['source_z0']))]
+    df = df.loc[~((df['x'] == df['source_x0']) & (df['z'] == df['source_z0']))] # remove os pontos na fonte
 
     return df
 

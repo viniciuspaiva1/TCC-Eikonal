@@ -484,3 +484,19 @@ class Architecture(object):
         fig = self._plot_kan_network(gamma=gamma, resolution=resolution,
                                      figsize=figsize, folder=folder)
         return fig
+
+class KANWrapper(torch.nn.Module):
+    def __init__(self, kan_model, beta=10):
+        super().__init__()
+        self.kan = kan_model
+        self.activation = torch.nn.Softplus(beta=beta)
+
+    def forward(self, x):
+        return self.activation(self.kan(x))
+
+    def __getattr__(self, name):
+        # Se o atributo não estiver na classe wrapper, procura no modelo KAN interno
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.kan, name)
