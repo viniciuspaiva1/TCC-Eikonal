@@ -47,3 +47,27 @@ def generateMultipleData(nPoints: tuple, nodeDistances: tuple, velocityModel: np
             frames.append(generateDataFrame(nPoints, nodeDistances, velocityModel, (x,z,0)))
     
     return pd.concat(frames)
+
+def generateSpacedSourcesData(nPoints: tuple, nodeIntervals: tuple, velocityModel: np.ndarray, spacings: list) -> dict:
+    """
+    Gera 3 conjuntos de dados por grid, com fontes espaçadas uniformemente segundo os valores em `spacings`.
+
+    Retorna um dicionário onde as chaves são os espaçamentos usados e os valores são os DataFrames.
+    """
+    max_x, max_z = nPoints[0], nPoints[1]
+    data_by_spacing = {}
+
+    for spacing in spacings:
+        frames = []
+        x_coords = np.arange(0, max_x, spacing)
+        z_coords = np.arange(0, max_z, spacing)
+
+        for x in x_coords:
+            for z in z_coords:
+                sourceOrigin = (x, z, 0)
+                df = generateDataFrame(nPoints, nodeIntervals, velocityModel, sourceOrigin)
+                frames.append(df)
+
+        data_by_spacing[spacing] = pd.concat(frames, ignore_index=True)
+
+    return data_by_spacing
