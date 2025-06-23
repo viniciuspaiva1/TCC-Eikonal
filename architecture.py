@@ -428,7 +428,7 @@ class Architecture(object):
         self.val_losses = checkpoint['val_losses']
 
         self.model.train()  # always use TRAIN for resuming training
-
+    
     def predict(self, x):
         # Set is to evaluation mode for predictions
         self.model.eval()
