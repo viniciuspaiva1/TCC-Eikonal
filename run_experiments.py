@@ -23,10 +23,10 @@ OUTPUT_DIR = Path("results")
 # Define tamanhos de grade e espaçamentos correspondentes
 grids_and_spacings = {
     (30, 30): [2, 3, 5],
-    (40, 40): [2, 3, 5],
-    (50, 50): [2, 5, 10],
-    (80, 80): [2, 5, 10],
-    (100, 100): [5, 10, 15]
+    # (40, 40): [2, 3, 5],
+    # (50, 50): [2, 5, 10],
+    # (80, 80): [2, 5, 10],
+    # (100, 100): [5, 10, 15]
 }
 
 def build_velocity_model(nPoints):
@@ -113,6 +113,10 @@ def train_and_evaluate(df, output_path, spacing_label):
         axes[0].set_title("True - Pykonal")
         axes[1].imshow(grid_pred, cmap='terrain')
         axes[1].set_title("Predicted - PINN+KAN")
+
+        for ax in axes:
+            ax.plot(sx, sz, marker='*', color='red', markersize=10, label='Fonte')
+            
         fig.suptitle(f"Grid {grid_true.shape[0]}x{grid_true.shape[1]} | Source ({sx},{sz})")
         plt.tight_layout()
         plt.savefig(output_path / f"comparison_source_{int(sx)}_{int(sz)}.png")

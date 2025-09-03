@@ -39,6 +39,8 @@ def generateMultipleData(nPoints: tuple, nodeDistances: tuple, velocityModel: np
 
     xInterval = np.arange(sourceOriginInterval[0][0], sourceOriginInterval[1][0] + 1)
     zInterval = np.arange(sourceOriginInterval[0][1], sourceOriginInterval[1][1] + 1)
+    print(xInterval)
+    print(zInterval)
 
     frames = []
     

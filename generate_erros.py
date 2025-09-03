@@ -139,13 +139,18 @@ for grid_folder in sorted(RESULTS_DIR.iterdir()):
     y_true = df_test[target].values
     y_pred = df_test['predicted_travel_time'].values.reshape(-1, 1)
     result_df = score(y_pred, y_true, labels=["Travel Time"])
+
     mae = result_df.loc["MAE", "Travel Time"]
+    mape = result_df.loc["MAPE", "Travel Time"]
+    r2 = result_df.loc["R²", "Travel Time"]
     mse = result_df.loc["MSE", "Travel Time"]
     rmse = result_df.loc["RMSE", "Travel Time"]
 
     summary.append({
         "Grid_Spacing": grid_folder.name,
         "MAE": mae,
+        "MAPE": mape,
+        "R²": r2,
         "MSE": mse,
         "RMSE": rmse
     })
@@ -160,15 +165,15 @@ for grid_folder in sorted(RESULTS_DIR.iterdir()):
         save_path=grid_folder / "mse_heatmap.png"
     )
 
-    # Adiciona ao resumo
-    summary.append({
-        "Grid_Spacing": grid_folder.name,
-        "MAE": mae,
-        "MSE": mse,
-        "RMSE": rmse
-    })
+    # # Adiciona ao resumo
+    # summary.append({
+    #     "Grid_Spacing": grid_folder.name,
+    #     "MAE": mae,
+    #     "MSE": mse,
+    #     "RMSE": rmse
+    # })
 
-    print(f"✅ MAE: {mae:.4f} | MSE: {mse:.6f} | RMSE: {rmse:.4f}")
+    print(f"✅ MAE: {mae:.4f} | MSE: {mse:.6f} | MAPE: {mape} | R²: {r2} | RMSE: {rmse:.4f}")
 
 # Salva o CSV com os erros de todos os grids
 df_summary = pd.DataFrame(summary)
